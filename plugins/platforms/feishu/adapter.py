@@ -1044,6 +1044,35 @@ def _install_lark_ws_isolation(ws_client_module: Any) -> None:
         _dispatch_connect.__wrapped__ = real_connect
         _dispatch_connect.__name__ = getattr(real_connect, "__name__", "connect")
         ws_client_module.websockets.connect = _dispatch_connect
+
+        original_receive_loop = ws_client_module.Client._receive_message_loop
+
+        async def _receive_message_loop_exit_notify(self: Any) -> None:
+            # The SDK schedules this coroutine right after the websocket handshake succeeded, so its
+            # entry is the only in-thread proof that a (re)built link is actually up.
+            on_link_up = getattr(_ws_isolation_state, "on_link_up", None)
+            if on_link_up is not None:
+                on_link_up()
+            try:
+                await original_receive_loop(self)
+            except Exception:
+                # ``Client.start()`` parks in ``run_until_complete(_select())``, which only returns
+                # when this worker loop stops, and the receive loop runs as a bare ``create_task``
+                # whose exception nobody retrieves — so every unrecoverable exit (reconnect ladder
+                # disabled, or its ``ClientException``/``ServerUnreachableException`` re-raise)
+                # left a deaf-but-ESTABLISHED socket whose executor future never completed and the
+                # supervisor never rebuilt (#113662). Log the root cause here and stop the loop so
+                # ``start()`` raises, the future completes and ``_supervise_websocket_thread`` fires.
+                # A *normal* return means the SDK's own ladder already reconnected (it scheduled a
+                # fresh receive loop) and must NOT stop the loop. Deliberate disconnects nil
+                # ``_ws_client`` first, so the supervisor exits without restarting.
+                logger.exception(
+                    "[Feishu] lark WS receive loop died; stopping the worker "
+                    "loop so the supervisor can rebuild"
+                )
+                asyncio.get_running_loop().stop()
+
+        ws_client_module.Client._receive_message_loop = _receive_message_loop_exit_notify
         _WS_ISOLATION_INSTALLED = True
 
 
@@ -1062,6 +1091,10 @@ def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
             setattr(ws_client, "_reconnect_interval", adapter._ws_reconnect_interval)
             if adapter._ws_ping_interval is not None:
                 setattr(ws_client, "_ping_interval", adapter._ws_ping_interval)
+            # SDK observer (lark-oapi ``Client.on_reconnecting``, fired first thing in ``_reconnect()``):
+            # on the live link ``_auto_reconnect`` is on, so the ladder runs *inside* the receive loop
+            # and the thread never dies — without this the supervisor's ``retrying`` is never published.
+            setattr(ws_client, "on_reconnecting", _on_reconnecting)
         except Exception:
             logger.debug("[Feishu] Failed to apply websocket runtime overrides", exc_info=True)
 
@@ -1070,9 +1103,23 @@ def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
         for key, value in (("ping_interval", adapter._ws_ping_interval), ("ping_timeout", adapter._ws_ping_timeout))
         if value is not None
     }
+    adapter_loop = adapter._loop
+
+    def _on_reconnecting() -> None:
+        if adapter_loop is not None and not adapter_loop.is_closed():
+            adapter_loop.call_soon_threadsafe(adapter._ws_link_retrying, ws_client)
+
+    def _on_link_up() -> None:
+        # Fired on the WS thread when the SDK scheduled a receive loop (handshake done); hop to the
+        # adapter loop so the ``connected`` re-stamp after a supervisor rebuild runs where the adapter's
+        # state lives.
+        if adapter_loop is not None and not adapter_loop.is_closed():
+            adapter_loop.call_soon_threadsafe(adapter._ws_link_up, ws_client)
+
     _install_lark_ws_isolation(ws_client_module)
     _ws_isolation_state.loop = loop
     _ws_isolation_state.connect_kwargs = connect_overrides
+    _ws_isolation_state.on_link_up = _on_link_up
 
     def _configure_with_overrides(conf: Any) -> Any:
         if original_configure is None:
@@ -1091,6 +1138,7 @@ def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
     finally:
         _ws_isolation_state.loop = None
         _ws_isolation_state.connect_kwargs = None
+        _ws_isolation_state.on_link_up = None
         if original_configure is not None:
             setattr(ws_client, "_configure", original_configure)
         pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
@@ -3713,6 +3761,11 @@ class FeishuAdapter(BasePlatformAdapter):
             if ws_future is not last_dead:
                 logger.error("[Feishu] WebSocket client thread exited unexpectedly; restarting in %.0fs", backoff)
                 last_dead = ws_future
+                # Still running, link unproven: ``connected`` stays wrong until ``_ws_link_up`` re-stamps it.
+                self._write_runtime_status_safe(
+                    "ws_link_lost", platform_state="retrying", error_code=None,
+                    error_message="Feishu websocket link lost; rebuilding",
+                )
             await asyncio.sleep(backoff)
             if not self._running:
                 return
@@ -3722,6 +3775,19 @@ class FeishuAdapter(BasePlatformAdapter):
             except Exception as exc:
                 logger.warning("[Feishu] WebSocket restart failed (retrying): %s", exc)
                 backoff = min(backoff * 2, 60.0)
+
+    def _ws_link_up(self, ws_client: Any) -> None:
+        """WS thread reports its link is up (SDK receive loop scheduled); re-stamp ``connected`` after a rebuild."""
+        if self._running and self._ws_client is ws_client:
+            self._mark_connected()
+
+    def _ws_link_retrying(self, ws_client: Any) -> None:
+        """WS thread reports the SDK's own reconnect ladder started; ``_ws_link_up`` re-stamps ``connected``."""
+        if self._running and self._ws_client is ws_client:
+            self._write_runtime_status_safe(
+                "ws_link_lost", platform_state="retrying", error_code=None,
+                error_message="Feishu websocket link lost; reconnecting",
+            )
 
     async def _connect_websocket(self) -> None:
         if not FEISHU_WEBSOCKET_AVAILABLE:
