@@ -508,6 +508,7 @@ import { readWindowsUserEnvVar } from './windows-user-env'
 import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './workspace-cwd'
 import { readWslWindowsClipboardImage } from './wsl-clipboard-image'
 import { resolvePickerDefaultPath, setActiveGatewayProfile, setWslBridgeProfileState } from './wsl-path-bridge'
+import { shouldRequestWslgX11Fallback, WSLG_X11_FALLBACK_EXIT_CODE } from './wslg-launch'
 
 const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR
 
@@ -14756,6 +14757,25 @@ function createWindow() {
 
   streamThrottle.register(mainWindow)
   wireCommonWindowHandlers(mainWindow, zoomWiringForWindowKind('chat'))
+
+  // #114615: under WSLg the supervising parent (entry.ts) picked Wayland by
+  // default and marked this child. A renderer that never launches there is a
+  // dead app; hand the process back with WSLG_X11_FALLBACK_EXIT_CODE so the
+  // parent re-execs once on X11. Not app.relaunch(): the parent must stay the
+  // one supervising (it keeps concurrently/Vite alive in dev and owns exit).
+  let wslgX11FallbackRequested = false
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    if (wslgX11FallbackRequested || !shouldRequestWslgX11Fallback(details, process.env)) {
+      return
+    }
+
+    wslgX11FallbackRequested = true
+    rememberLog('[renderer:main] renderer never launched under default WSLg Wayland; handing back for one X11 relaunch (#114615)')
+    void exitAfterBackendShutdown(WSLG_X11_FALLBACK_EXIT_CODE).catch(error => {
+      rememberLog(`[renderer:main] backend shutdown before the X11 relaunch failed: ${error?.message || error}`)
+      app.exit(WSLG_X11_FALLBACK_EXIT_CODE)
+    })
+  })
 
   // Per-window renderer lifecycle diagnostics + recovery (#81290). The reload
   // policy (crashed/oom → bounded reload via the shared rolling budget, then
