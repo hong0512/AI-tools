@@ -1688,7 +1688,14 @@ export const en: Translations = {
         selectedTitle: 'Backend selected',
         selectedMessage: backend => `Terminal commands now run via ${backend}. Applies to new sessions.`,
         failedSelect: backend => `Failed to select ${backend}`,
-        needsSetupHint: 'You can select this option now — commands will fail until setup is complete.',
+        needsSetupHint:
+          'This backend is currently selected without full setup — commands will fail until setup is complete.',
+        needsSetupConfirmTitle: backend => `Select ${backend} anyway?`,
+        needsSetupConfirmDescription: detail =>
+          `${detail} Sessions that start after this change will have no terminal or file tools until setup is finished.`,
+        needsSetupConfirmDescriptionGeneric:
+          "This backend isn't set up yet. Sessions that start after this change will have no terminal or file tools until setup is finished.",
+        needsSetupConfirmAction: 'Select anyway',
         unavailableTitle: 'Terminal commands are unavailable',
         unavailableMessage: backend =>
           `Hermes can't run shell commands right now: ${backend} isn't ready. Switch to Local, or finish setting up ${backend} and try again.`,
