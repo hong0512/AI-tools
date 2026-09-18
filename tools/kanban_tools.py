@@ -522,6 +522,10 @@ def _handle_show(args: dict, **kw) -> str:
         return json.dumps({
             "task": _fields(task, _TASK_FIELDS),
             "parents": kb.parent_ids(conn, tid),
+            # Non-terminal parents; on a running card this means the dependency
+            # gate is not holding it and kanban_complete will refuse.
+            "unsatisfied_parents": [
+                {"id": pid, "status": status} for pid, status in kb.unsatisfied_parents(conn, tid)],
             "children": kb.child_ids(conn, tid),
             "comments": [_fields(c, _COMMENT_FIELDS) for c in kb.list_comments(conn, tid)],
             # Capped; full log via CLI.
@@ -617,8 +621,18 @@ def _handle_complete(args: dict, **kw) -> str:
                 f"summary/metadata and either drop these ids from created_cards, or pass "
                 f"created_cards=[] to skip the card-claim check entirely.")
         task = kb.get_task(conn, tid)
-        _check(ok, (task.last_failure_error if task else None) or
-               f"could not complete {tid} (unknown id, stale run, or already terminal)")
+        if not ok:
+            # complete_task reports every refusal as bare False; a reopened or
+            # never-finished parent is the actionable one. Name the blockers so
+            # the worker/operator completes the parents instead of re-running.
+            blockers = kb.unsatisfied_parents(conn, tid)
+            if blockers:
+                detail = ", ".join(f"{pid} ({status})" for pid, status in blockers)
+                raise _Reject(
+                    f"could not complete {tid}: unsatisfied parent dependencies: "
+                    f"{detail}; complete the parents first (done or archived)")
+            _check(False, (task.last_failure_error if task else None) or
+                   f"could not complete {tid} (unknown id, stale run, or already terminal)")
         run = kb.latest_run(conn, tid)
         return _ok(task_id=tid, run_id=run.id if run else None)
 
@@ -1035,13 +1049,17 @@ def _handle_unblock(args: dict, **kw) -> str:
 
 @_kanban_handler("kanban_link")
 def _handle_link(args: dict, **kw) -> str:
-    """Add a parent→child dependency edge after the fact (cycles/self-links → ValueError)."""
+    """Add a parent→child dependency edge after the fact (cycles/self-links/running
+    children → ValueError). A worker linking its OWN running card proves ownership
+    with its run id so the dependency-block handoff still works."""
     _reject_delegated_child_mutation("kanban_link")
     parent_id = args.get("parent_id")
     child_id = args.get("child_id")
     _check(parent_id and child_id, "both parent_id and child_id are required")
     with _board(args.get("board")) as (kb, conn):
-        gated = kb.link_tasks(conn, parent_id=parent_id, child_id=child_id)
+        gated = kb.link_tasks(
+            conn, parent_id=parent_id, child_id=child_id,
+            expected_child_run_id=_worker_run_id(str(child_id)))
         return _ok(parent_id=parent_id, child_id=child_id, gated=gated,
                    **({"gated_by": parent_id} if gated else {}))
 
