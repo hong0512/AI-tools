@@ -3278,8 +3278,13 @@ _OPEN_SUBKEY_TOP_LEVEL_KEYS = _OPEN_DICT_TOP_LEVEL_KEYS | _DYNAMIC_TOP_LEVEL_KEY
 
 
 def _known_top_level_keys() -> set[str]:
-    """Return the union of known top-level config keys for validation."""
-    return set(DEFAULT_CONFIG) | _OPEN_SUBKEY_TOP_LEVEL_KEYS
+    """Return the union of known top-level config keys for validation.
+
+    ``_EXTRA_KNOWN_ROOT_KEYS`` are roots the runtime reads but DEFAULT_CONFIG deliberately
+    omits (``platform_toolsets``, ``smart_model_routing``, ...); without them every path under
+    such a root was flagged "not a recognized config key" with a difflib near-miss suggestion.
+    """
+    return set(DEFAULT_CONFIG) | _EXTRA_KNOWN_ROOT_KEYS | _OPEN_SUBKEY_TOP_LEVEL_KEYS
 
 
 def _suggest_closest_key(key: str, candidates: set[str], cutoff: float = 0.6) -> Optional[str]:
@@ -3333,8 +3338,15 @@ def _validate_config_key(key: str) -> tuple[bool, Optional[str]]:
             # Checked BEFORE the fuzzy sibling: a structural match is proof, a fuzzy match is a
             # guess, and ``agent.gateway.strict`` must be refused as ``gateway.strict`` rather
             # than written with a misleading ``agent.gateway_timeout`` did-you-mean.
+            # Only DEFAULT_CONFIG / open-subkey roots qualify as the stripped prefix:
+            # ``_EXTRA_KNOWN_ROOT_KEYS`` also holds the top-level FORMS of nested gateway
+            # settings (``filter_silence_narration``, ``reset_triggers``, ...), and
+            # ``gateway.filter_silence_narration`` is a runtime-read path, not a wrong prefix.
             rest = ".".join(segments[len(consumed):])
-            if _split_key_path(rest)[0] in _known_top_level_keys() and _validate_config_key(rest)[0]:
+            if (
+                _split_key_path(rest)[0] in set(DEFAULT_CONFIG) | _OPEN_SUBKEY_TOP_LEVEL_KEYS
+                and _validate_config_key(rest)[0]
+            ):
                 return False, rest
             sibling = _suggest_closest_key(seg, set(node.keys()))
             if sibling is not None:
