@@ -171,6 +171,22 @@ def _receipt_owed_gateways() -> set[tuple[str, str]] | None:
     return owed
 
 
+def _fleet_covered_gateways(fleet: list) -> set[tuple[str, str]] | None:
+    """``(kind, profile)`` identities the live rows vouch for; ``None`` when any row is unidentified.
+
+    A multiplexer's row carries the ``served_profiles`` its runtime status records (``_fleet_row``
+    keeps the field only when well-formed), so one live process covers every profile it serves.
+    """
+    covered: set[tuple[str, str]] = set()
+    for row in fleet:
+        profile = row.get("profile") if isinstance(row, dict) else None
+        if not profile or profile == "unknown":
+            return None  # unidentified runtime: the matrix cannot vouch for it
+        covered.add(("gateway", profile))
+        covered.update(("gateway", served) for served in row.get("served_profiles") or [])
+    return covered
+
+
 def _live_fleet_covers_receipt(expected_sha: str | None, *, accept_states: tuple = ("current",)) -> bool:
     """Require current successors for every recorded runtime, not just any live row.
 
@@ -196,7 +212,8 @@ def _live_fleet_covers_receipt(expected_sha: str | None, *, accept_states: tuple
             for row in fleet
         ):
             return False
-        return owed <= {("gateway", row.get("profile")) for row in fleet}
+        covered = _fleet_covered_gateways(fleet)
+        return covered is not None and owed <= covered
     except Exception as exc:
         logger.debug("Could not reconcile pending fleet identities: %s", exc)
         return False
@@ -251,15 +268,13 @@ def _marker_only_restart_obsolete() -> bool:
         return False
     if not fleet:
         return False  # probe answered empty: no proof either way
+    covered = _fleet_covered_gateways(fleet)
+    if covered is None:
+        return False  # unidentified runtime: the matrix cannot vouch for it
     for row in fleet:
-        if not isinstance(row, dict):
-            return False
-        profile = row.get("profile")
-        if not profile or profile == "unknown":
-            return False  # unidentified runtime: the matrix cannot vouch for it
         if row.get("state") != "current" or str(row.get("code_sha")) != expected_sha:
             return False  # stale / down / unknown-identity row still owes the restart
-    if owed is None or not owed <= {("gateway", row.get("profile")) for row in fleet}:
+    if owed is None or not owed <= covered:
         return False  # a gateway the receipt owes is absent (down) or unidentifiable
     _clear_fleet_restart_pending_marker()
     logger.debug(
@@ -315,6 +330,8 @@ def _update_owes_fleet_restart() -> bool:
     Same evidence as :func:`_pending_fleet_restart_needed`, except that a receipt whose
     restart phase completed is held to the code it pulled, not to today's checkout: the
     update kept its promise, and a checkout moved later by hand is not its unfinished work.
+    A fleet an operator has since restarted onto that moved checkout (``hermes gateway
+    restart`` — the remedy this warning names) has nothing of the update left to owe either.
     """
     with suppress(OSError):
         if _fleet_restart_pending_marker_path().is_file():
@@ -324,8 +341,8 @@ def _update_owes_fleet_restart() -> bool:
     from hermes_cli.update_cmd import _current_checkout_sha
     from hermes_cli.update_receipt import read_latest_receipt
     restarted_to = _receipt_restart_phase_completed(read_latest_receipt() or {})
-    if restarted_to:
-        return not _live_fleet_covers_receipt(restarted_to, accept_states=("current", "stale"))
+    if restarted_to and _live_fleet_covers_receipt(restarted_to, accept_states=("current", "stale")):
+        return False
     return not _live_fleet_covers_receipt(_current_checkout_sha())
 
 
