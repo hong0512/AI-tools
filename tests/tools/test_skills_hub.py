@@ -267,13 +267,19 @@ class TestSkillsShSource:
         shard0 = "<urlset><url><loc>https://www.skills.sh/o/r/skill-a</loc></url></urlset>"
         calls: List[str] = []
 
-        def fake_get_text(url, **kwargs):
+        def fake_get(url, *, timeout, headers=None):
             calls.append(url)
             if url.endswith("sitemap.xml"):
-                return index
-            return shard0 if url.endswith("sitemap-skills-0.xml") else None
+                return MagicMock(status_code=200, headers={}, text=index)
+            if url.endswith("sitemap-skills-0.xml"):
+                return MagicMock(status_code=200, headers={}, text=shard0)
+            raise httpx.ConnectError("shard unreachable")  # a failed hop: the guarded GET returns None
 
-        with patch("tools.skills_hub_skillssh._get_text", side_effect=fake_get_text):
+        # Sitemap hops go through the hub's guarded GET (SSRF + redirect re-check), so the seam
+        # is ``_ssrf_safe_http_get`` — the same one ``test_sitemap_fetches_go_through_guarded_get`` pins.
+        with patch("tools.skills_hub.is_safe_url", lambda _url: True), \
+             patch("tools.skills_hub.check_website_access", lambda _url: None), \
+             patch("tools.skills_hub._ssrf_safe_http_get", side_effect=fake_get):
             results = self._source()._sitemap_catalog(0)
 
         assert [m.identifier for m in results] == ["skills-sh/o/r/skill-a"]
