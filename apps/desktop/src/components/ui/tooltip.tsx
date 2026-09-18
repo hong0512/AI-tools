@@ -143,6 +143,13 @@ interface TooltipContentProps extends React.ComponentProps<typeof TooltipPrimiti
   boundary?: 'pane' | 'viewport'
 }
 
+/** `display: contents` (and detached) elements report an all-zero rect. */
+function hasLayout(element: Element | null): boolean {
+  const rect = element?.getBoundingClientRect()
+
+  return !!rect && (rect.width > 0 || rect.height > 0)
+}
+
 function TooltipContent({
   align,
   arrowPadding = 6,
@@ -162,7 +169,29 @@ function TooltipContent({
   const [pane, setPane] = React.useState<Element | null>(null)
 
   React.useLayoutEffect(() => {
-    setPane(boundary === 'pane' ? (anchor?.current?.closest('[data-tree-group]') ?? null) : null)
+    if (boundary !== 'pane') {
+      setPane(null)
+
+      return
+    }
+
+    // A boundary without geometry (a `display: contents` host, e.g. the
+    // floating-composer tree-group) zeroes every clipping rect, so `hide()`
+    // detaches a fully visible trigger and the tip mounts straight into
+    // `visibility: hidden`. Only a pane that has layout of its own may clip:
+    // skip layout-less hosts up to the enclosing pane, or the viewport when
+    // none has layout. A trigger without geometry cannot be judged (jsdom),
+    // so the nearest pane stands as before.
+    const trigger = anchor?.current ?? null
+    let candidate = trigger?.closest('[data-tree-group]') ?? null
+
+    if (hasLayout(trigger)) {
+      while (candidate && !hasLayout(candidate)) {
+        candidate = candidate.parentElement?.closest('[data-tree-group]') ?? null
+      }
+    }
+
+    setPane(candidate)
   }, [anchor, boundary])
 
   return (
