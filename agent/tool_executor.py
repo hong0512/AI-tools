@@ -81,7 +81,10 @@ def _ensure_file_checkpoint(agent, function_name: str, function_args: dict, effe
     if not file_path:
         return
     from agent.file_safety import is_nt_namespace_path
-    from tools.file_tools_paths import _resolve_path_for_task
+    from tools.file_tools_paths import _resolve_path_for_task, container_backend_for_task
+
+    if container_backend_for_task(effective_task_id or "default") is not None:
+        return  # container paths: nothing to checkpoint on the host
 
     # Resolving an NT-namespace path is itself the NTLM-leak trigger; leave the
     # tool's raw-string guard to refuse it without a checkpoint stat.
@@ -980,9 +983,11 @@ def _begin_tool_execution(agent, ref: _ToolCallRef, display_index: int | None) -
         elif function_name == "terminal":
             command = function_args.get("command", "")
             if _is_destructive_command(command):
-                from agent.runtime_cwd import scope_terminal_cwd
-                cwd = function_args.get("workdir") or scope_terminal_cwd() or os.getcwd()
-                agent._checkpoint_mgr.ensure_checkpoint(cwd, f"before terminal: {command[:60]}")
+                from tools.file_tools_paths import container_backend_for_task
+                if container_backend_for_task(effective_task_id or "default") is None:
+                    from agent.runtime_cwd import scope_terminal_cwd
+                    cwd = function_args.get("workdir") or scope_terminal_cwd() or os.getcwd()
+                    agent._checkpoint_mgr.ensure_checkpoint(cwd, f"before terminal: {command[:60]}")
 
 
 def _emit_tool_complete_and_risk(agent, ref: _ToolCallRef, result, risk_metadata, blocked: bool) -> None:
