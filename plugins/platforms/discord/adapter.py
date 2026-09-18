@@ -5391,11 +5391,6 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 logger.warning("[%s] %s failed: %s", self.name, fail_log, e)
             return SendResult(success=False, error=str(e))
 
-    @staticmethod
-    def _embed_body(text: str, limit: int = 4088) -> str:
-        """Trim to Discord's 4096-char embed description limit (conservatively)."""
-        return text if len(text) <= limit else text[: limit - 3] + "..."
-
     # Payload lives in plain content: embeds can be invisible/detached on web/mobile.
     _EA_HEADER = (f"⚠️ **{EA_HEADER_TEXT}**\n\n"
                   "Do you want Hermes to run this command?\n\n"
@@ -5404,6 +5399,8 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
     _EA_CODE_CLOSE = "\n```\n"
     _EA_REASON_LABEL = f"**{EA_REASON_LABEL_TEXT}:** "
     _EA_SMART_DENY_LINE = "\n\n**Smart DENY:** owner override applies to this one operation only."
+    # The reason shares the 2000-char content cap with the command; unbounded it would starve
+    # the command preview to zero and push the content past the cap.
     _EA_REASON_BUDGET = 300
 
     def _exec_approval_cmd_budget(self, description: str, smart_denied: bool) -> int:
@@ -5415,7 +5412,7 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         return max(0, self.MAX_MESSAGE_LENGTH - fixed)
 
     async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
-        """Button view + embed mirror; buttons call ``resolve_gateway_approval()`` (not /approve)."""
+        """Send an approval with content as its canonical payload and an embed for state."""
         def _build(_channel):
             content = prompt.text
             mention_content = self._approval_mention_content()
@@ -5423,10 +5420,8 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 content = f"{mention_content}\n{content}"
             embed = discord.Embed(
                 title=f"⚠️ {EA_HEADER_TEXT}",
-                description=f"```\n{self._embed_body(prompt.command)}\n```",
                 color=discord.Color.orange(),
             )
-            embed.add_field(name=EA_REASON_LABEL_TEXT, value=self._truncate_preview(prompt.description, self._EA_REASON_BUDGET), inline=False)
             require_admin, admin_user_ids = _resolve_exec_approval_admin_gate(getattr(self.config, "extra", None))
             choices = set(prompt.choices)
             view = ExecApprovalView(
@@ -5451,9 +5446,9 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
     ) -> SendResult:
         """Send a three-button slash-command confirmation prompt."""
         def _build(_channel):
-            embed = discord.Embed(
-                title=title or "Confirm", description=self._embed_body(message), color=discord.Color.orange(),
-            )
+            # Header-only card (same rule as the exec approval prompt): the message lives in
+            # content only, so embed-rendering clients don't see it twice (#114693).
+            embed = discord.Embed(title=title or "Confirm", color=discord.Color.orange())
             content = self._self_contained_prompt_content(f"**{title or 'Confirm'}**", message)
             view = SlashConfirmView(
                 session_key=session_key, confirm_id=confirm_id,
@@ -5486,16 +5481,13 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
             return str(c).strip()
 
         def _build(_channel):
-            embed = discord.Embed(
-                title="❓ Hermes needs your input",
-                description=self._embed_body(str(question or "").strip()),
-                color=discord.Color.orange(),
-            )
+            # Header-only card (same rule as the exec approval prompt): the question and hint live
+            # in content only, so embed-rendering clients don't see them twice (#114693).
+            embed = discord.Embed(title="❓ Hermes needs your input", color=discord.Color.orange())
             # 5 buttons × 5 rows = 25; one slot is reserved for "Other".
             clean_choices = [s for s in (_flatten_choice(c) for c in (choices or [])) if s][:24]
             if clean_choices:
                 hint = "Pick one below, or click ✏️ Other to type a custom answer."
-                embed.add_field(name="Choices", value=hint, inline=False)
                 view = ClarifyChoiceView(
                     choices=clean_choices, clarify_id=clarify_id,
                     allowed_user_ids=self._allowed_user_ids,
@@ -5503,7 +5495,6 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 )
             else:
                 hint = "Reply in this channel with your answer."
-                embed.add_field(name="Reply", value=hint, inline=False)
                 view = None
             content = self._self_contained_prompt_content(
                 "❓ **Hermes needs your input**", str(question or "").strip(), tail=f"\n\n{hint}",
