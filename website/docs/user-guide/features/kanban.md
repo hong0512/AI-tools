@@ -565,7 +565,12 @@ therefore exits non-zero: `1` for an ordinary failure, and `75`
 (`EX_TEMPFAIL`) when the provider was rate-limited, overloaded, returning
 5xx or timing out, or the account hit a billing/quota wall — the dispatcher records that run as `rate_limited` and
 requeues the task without counting a failure, so a quota window is never
-booked as a protocol violation.
+booked as a protocol violation. The worker also writes its exit code as the
+last line of its own log (`[kanban-worker-exit] rc=<code>`), so a per-tick
+`hermes kanban dispatch` process — which never reaped the worker and cannot
+read its exit status — books the same death the same way the gateway-embedded
+dispatcher does; a worker killed before it reaches that line is a plain
+`crashed` (`pid <n> not alive`).
 
 **Agent-side prevention:** Before the worker exits, Hermes injects up to two
 synthetic nudges when it detects the model is about to stop without a terminal
@@ -586,7 +591,10 @@ before reaching the nudge, the dispatcher gives the violation a **bounded retry*
 before auto-blocking the task instead of respawning it into the same loop. The
 budget counts only *consecutive* clean-exit protocol violations — interleaved
 rate-limited requeues are neutral, and any other failure kind resets the
-streak — and a per-task `max_retries` overrides the bound. This usually means
+streak — and a per-task `max_retries` overrides the bound. A card blocked by
+this budget stays blocked (it is not auto-promoted like a below-`failure_limit`
+breaker block) until `hermes kanban unblock <id>`, which also grants a fresh
+retry budget. This usually means
 the model wrote a plain-text answer and exited without using the Kanban tool
 surface.
 
