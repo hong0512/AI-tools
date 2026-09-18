@@ -422,7 +422,7 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
 # ── extracted collaborators (re-exported; see module docstring) ────────────────────────────
 
 from hermes_cli.runtime_provider_custom import (  # noqa: E402,F401
-    _apply_custom_provider_extras, _custom_provider_request_overrides, _filter_capabilities, _find_custom_identity,
+    _LLAMACPP_ALIASES, _apply_custom_provider_extras, _custom_provider_request_overrides, _filter_capabilities, _find_custom_identity,
     _get_named_custom_provider, _lift_common_custom_fields, _lift_extra_headers,
     _lift_model_capabilities, _normalize_base_url_for_match, _normalize_custom_provider_name, _resolve_named_custom_runtime,
     _try_resolve_from_custom_pool, canonical_custom_identity, find_custom_provider_identity,
@@ -776,6 +776,37 @@ def _raise_if_provider_disabled(requested_provider: str) -> None:
                          f"(providers.{requested_provider}.enabled: false)")
 
 
+def _raise_if_local_alias_missing_endpoint(requested_provider: str, explicit_base_url: Optional[str]) -> None:
+    """A local-server alias (``ollama``, ``vllm`` — anything ``auth.resolve_provider`` maps to
+    ``custom`` without a rung of its own) with NO endpoint configured anywhere would otherwise walk
+    the whole ladder to the OpenRouter fallback and spend an unrelated cloud key there (#113703).
+    Keyed on the ABSENCE of an endpoint, not on the alias name: ``/model <direct-alias>`` resolves
+    the alias label with the alias endpoint as ``explicit_base_url`` and must keep working, which
+    is why the name-keyed version was reverted (e9a54c48f2 / a9fabe43c4). Endpoint sources:
+    explicit call base_url, ``CUSTOM_BASE_URL``, a trusted ``model.base_url``, or a
+    ``providers.<alias>`` block carrying a ``base_url``. ``OPENROUTER_BASE_URL`` is never the
+    alias endpoint, and an explicit api_key does not lift the guard — that key was meant for the
+    alias's own server. ``llamacpp`` fails fast on its own managed-server rung."""
+    requested_norm = (requested_provider or "").strip().lower()
+    if (requested_norm in ("", "custom") or requested_norm in _LLAMACPP_ALIASES
+            or not _resolves_to_custom(requested_norm)):
+        return
+    if str(explicit_base_url or "").strip() or get_secret_str("CUSTOM_BASE_URL", "").strip():
+        return
+    model_cfg = _get_model_config()
+    if _config_base_url_trustworthy_for_bare_custom(str(model_cfg.get("base_url") or ""), _cfg_provider(model_cfg)):
+        return
+    if str((_get_named_custom_provider(requested_provider) or {}).get("base_url") or "").strip():
+        return
+    raise AuthError(
+        f"provider '{requested_provider}' has no endpoint configured, so the request is not sent anywhere "
+        f"(it would otherwise fall back to OpenRouter). Set providers.{requested_norm}.base_url or "
+        "model.base_url in config.yaml.",
+        provider=requested_provider,
+        code="missing_base_url",
+    )
+
+
 def _resolve_vertex_runtime(requested_provider: str) -> Dict[str, Any]:
     """Vertex AI (OAuth2). The credential *path* (GOOGLE_APPLICATION_CREDENTIALS) must never be
     treated as a static API key; a short-lived token is minted per call, and mid-session expiry is
@@ -855,6 +886,7 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
     OpenCode Zen/Go where different models route through different API surfaces)."""
     requested_provider = resolve_requested_provider(requested)
     _raise_if_provider_disabled(requested_provider)
+    _raise_if_local_alias_missing_endpoint(requested_provider, explicit_base_url)
     runtime = next(r for r in _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, target_model) if r)
     _raise_for_credentialless_bare_custom(requested_provider, runtime)
     return runtime
