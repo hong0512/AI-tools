@@ -503,10 +503,10 @@ export const ko: Translations = {
 
   achievements: {
     hero: {
-      kicker: "Agentic Gamerscore",
-      title: "Hermes Achievements",
+      kicker: "에이전트 업적 점수",
+      title: "Hermes 업적",
       subtitle:
-        "실제 세션 기록에서 획득하는 Hermes 컬렉터블 배지입니다. 알려져 있지만 아직 달성되지 않은 업적은 Discovered로 표시되며, Secret 업적은 일치하는 동작이 처음 나타날 때까지 숨겨집니다.",
+        "실제 세션 기록에서 획득하는 Hermes 컬렉터블 배지입니다. 알려져 있지만 아직 달성되지 않은 업적은 ‘발견됨’으로 표시되며, 시크릿 업적은 조건에 맞는 동작이 처음 나타날 때까지 숨겨집니다.",
       scan_subtitle:
         "Hermes 세션 기록을 스캔하고 있습니다. 기록이 많으면 첫 스캔에 5~10초가 걸릴 수 있습니다.",
     },
@@ -521,7 +521,7 @@ export const ko: Translations = {
       secrets: "시크릿",
       secrets_hint: "첫 신호가 있을 때까지 숨겨짐",
       highest_tier: "최고 등급",
-      highest_tier_hint: "Copper → Silver → Gold → Diamond → Olympian",
+      highest_tier_hint: "구리 → 은 → 금 → 다이아몬드 → 올림피언",
       latest: "최근",
       latest_hint_empty: "Hermes를 더 사용해 보세요",
       none_yet: "아직 없음",
@@ -554,7 +554,7 @@ export const ko: Translations = {
       tiers_header: "등급",
       secret_header: "시크릿 업적",
       secret_body:
-        "시크릿은 정확한 트리거 조건을 숨깁니다. Hermes가 관련 신호를 감지하면 카드가 Discovered로 바뀌고 요건이 표시됩니다.",
+        "시크릿은 정확한 트리거 조건을 숨깁니다. Hermes가 관련 신호를 감지하면 카드가 ‘발견됨’으로 바뀌고 요건이 표시됩니다.",
       scan_status_header: "스캔 상태",
       scan_status_body:
         "Hermes는 로컬 기록을 한 번 스캔한 뒤 카드를 자동으로 표시합니다. 몇 초 걸리더라도 멈춘 것이 아닙니다.",
@@ -604,7 +604,7 @@ export const ko: Translations = {
         "X에 공유를 누르면 새 탭에서 미리 작성된 게시물이 열립니다. 1200×630 배지를 첨부하려면 먼저 이미지 복사를 누르세요 — X 작성기에서 바로 붙여넣을 수 있습니다. PNG 다운로드는 파일을 저장하여 어디서나 사용할 수 있게 합니다.",
       clipboard_unsupported:
         "이 브라우저에서는 클립보드 이미지 복사를 지원하지 않습니다 — 대신 다운로드를 이용하세요.",
-      tweet_text: "Just unlocked {tier_part}\"{name}\" in Hermes Agent ☤",
+      tweet_text: "Hermes Agent에서 {tier_part}\"{name}\" 업적을 해제했습니다 ☤",
     },
   },
   kanban: {
@@ -620,11 +620,11 @@ export const ko: Translations = {
     slug: "슬러그",
     slugHint: "— 소문자, 하이픈, 예: atm10-server",
     confirmDoneMany:
-      "Mark {n} tasks as done? The workers' claims are released and dependent children become ready.",
+      "{n}개의 작업을 완료로 표시하시겠습니까? 워커의 점유가 해제되고 종속된 하위 작업이 준비 상태가 됩니다.",
     confirmArchiveMany:
-      "Archive {n} tasks? They disappear from the default board view.",
+      "{n}개의 작업을 보관하시겠습니까? 기본 보드 보기에서 사라집니다.",
     confirmBlockedMany:
-      "Mark {n} tasks as blocked? The workers' claims are released.",
+      "{n}개의 작업을 차단됨으로 표시하시겠습니까? 워커의 점유가 해제됩니다.",
     displayName: "표시 이름",
     displayNameHint: "(선택)",
     description: "설명",
